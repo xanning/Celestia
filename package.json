@@ -1,0 +1,28 @@
+{
+  "name": "celestia",
+  "version": "1.0.0",
+  "description": "bedwars queue botter",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "node index.js"
+  },
+  "keywords": [
+    "minecraft",
+    "hypixel",
+    "bedwars",
+    "bot",
+    "mineflayer"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "axios": "^1.13.2",
+    "https-proxy-agent": "^7.0.2",
+    "minecraft-data": "^3.47.0",
+    "mineflayer": "github:binmasterdotpro/mineflayer#master",
+    "mineflayer-pathfinder": "^1.9.1",
+    "socks-proxy-agent": "^8.0.2",
+    "vec3": "^0.1.8"
+  }
+}
