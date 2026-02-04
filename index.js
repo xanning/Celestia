@@ -553,7 +553,7 @@ class BedwarsBot {
         try {
             if (this.policiesAccepted || !this.bot) return;
             
-                this.logToChild('📖 Hypixel policies book detected - auto accepting...');
+                this.logToChild('Hypixel policies book detected');
                 
                 
                 this.bot.chat('/policies accept');
@@ -581,7 +581,7 @@ class BedwarsBot {
     async handleLobbyMessage(msg) {
        
         if (msg.includes('joined the lobby!') || msg.includes('You are now in')) {
-            this.logToChild('Confirmed in lobby, starting spam');
+            // dont rly do smthn
         }
     }
 
