@@ -7,7 +7,10 @@ const { SocksProxyAgent } = require('socks-proxy-agent');
 const { spawn } = require('child_process');
 const { HttpsProxyAgent } = require('https-proxy-agent');
 const axios = require('axios'); 
+
 const CONFIG = {
+    spawnConsoleWindows: true, // Set to false to disable spawning console log windows for each bot
+    mode: null, // Will be set on startup: 'bedwars' or 'lobby'
     gameMode: 'bedwars_eight_one', // solos, doubles: bedwars_eight_two, threes: bedwars_four_three, fours: bedwars_four_four
     tokensFile: 'tokens.txt',
     proxiesFile: 'proxies.txt', // Optional, format: type://user:pass@host:port or type://host:port
@@ -30,6 +33,10 @@ const CONFIG = {
         chestVisitChance: 0.6,
         randomWalkChance: 0.8,
         actionInterval: 10000 
+    },
+    lobbyMode: {
+        messageInterval: 4000, // 4 seconds
+        messageTemplate: 'i am a SPAMMER i like SPAMMING |  '
     }
 };
 
@@ -155,7 +162,7 @@ class BotManager {
         console.log('═══════════════════════════════════════════════════════════════════');
         console.log('          Celestia');
         console.log('═══════════════════════════════════════════════════════════════════');
-        console.log(`Session ID: ${CONFIG.botIdentifier} | Mode: ${CONFIG.gameMode}`);
+        console.log(`Session ID: ${CONFIG.botIdentifier} | Mode: ${CONFIG.mode || 'N/A'} | Game: ${CONFIG.gameMode}`);
         console.log(`Total Bots: ${this.bots.size} | Active: ${Array.from(this.botStates.values()).filter(s => s.state !== 'DISCONNECTED').length}`);
         console.log('───────────────────────────────────────────────────────────────────');
         
@@ -169,7 +176,10 @@ class BotManager {
         }
 
       
-        const stateOrder = ['IN_GAME', 'PREGAME_LOBBY', 'QUEUEING', 'LOBBY', 'INITIALIZING', 'DISCONNECTED'];
+        const stateOrder = CONFIG.mode === 'lobby' 
+            ? ['LOBBY_SPAM', 'LOBBY', 'INITIALIZING', 'DISCONNECTED']
+            : ['IN_GAME', 'PREGAME_LOBBY', 'QUEUEING', 'LOBBY', 'INITIALIZING', 'DISCONNECTED'];
+            
         for (const state of stateOrder) {
             if (stateGroups.has(state)) {
                 const bots = stateGroups.get(state);
@@ -191,7 +201,7 @@ class BotManager {
         }
 
         
-        if (this.lobbyGroups.size > 0) {
+        if (CONFIG.mode === 'bedwars' && this.lobbyGroups.size > 0) {
             console.log('\n───────────────────────────────────────────────────────────────────');
             console.log('🎮 PREGAME LOBBY GROUPS:');
             for (const [lobbyId, bots] of this.lobbyGroups.entries()) {
@@ -207,7 +217,11 @@ class BotManager {
         }
 
         console.log('\n═══════════════════════════════════════════════════════════════════');
-        console.log('Commands: Type bot number (1-N) to requeue | "all" to requeue all | "quit" to exit');
+        if (CONFIG.mode === 'bedwars') {
+            console.log('Commands: Type bot number (1-N) to requeue | "all" to requeue all | "quit" to exit');
+        } else {
+            console.log('Commands: "quit" to exit');
+        }
         console.log('═══════════════════════════════════════════════════════════════════\n');
     }
 }
@@ -234,6 +248,7 @@ function getStateIcon(state) {
         'PREGAME_LOBBY': '⏳',
         'QUEUEING': '🔄',
         'LOBBY': '🏠',
+        'LOBBY_SPAM': '💬',
         'INITIALIZING': '🔧',
         'DISCONNECTED': '❌'
     };
@@ -372,9 +387,11 @@ class BedwarsBot {
         this.pregameAnnouncePhrase = `${CONFIG.botIdentifier} ${getRandomPhrase()}`;
         this.hasAnnouncedInPregame = false;
         this.inGameInterval = null;
+        this.lobbySpamInterval = null;
         this.currentState = 'INITIALIZING';
         this.lobbyId = null;
         this.mapName = null;
+        this.policiesAccepted = false;
         
         
         const logDir = './logs';
@@ -387,13 +404,14 @@ class BedwarsBot {
 
        
         fs.writeFileSync(this.logFile, `=== ${this.username} CONSOLE LOGS ===\n`);
-        const openLogWindow = (logFile) => {
-            const logCommand = `powershell -command "Get-Content ${logFile} -Wait"`;
-            spawn('cmd.exe', ['/c', 'start', 'cmd.exe', '/k', logCommand], { shell: true });
-        };
-
-        openLogWindow(this.logFile);
-
+        
+        if (CONFIG.spawnConsoleWindows) {
+            const openLogWindow = (logFile) => {
+                const logCommand = `powershell -command "Get-Content ${logFile} -Wait"`;
+                spawn('cmd.exe', ['/c', 'start', 'cmd.exe', '/k', logCommand], { shell: true });
+            };
+            openLogWindow(this.logFile);
+        }
     }
 
     logToChild(message) {
@@ -425,7 +443,9 @@ class BedwarsBot {
 
         try {
             this.bot = mineflayer.createBot(botOptions);
-            this.bot.loadPlugin(pathfinder);
+            if (CONFIG.mode === 'bedwars') {
+                this.bot.loadPlugin(pathfinder);
+            }
             this.setupEventHandlers();
             manager.addBot(this.username, this);
             this.logToChild('✅ Bot connected successfully');
@@ -465,21 +485,53 @@ class BedwarsBot {
                 await sleep(2000);
                 
                 this.logToChild('Chunks loaded');
-                this.queueGame();
+                
+                if (CONFIG.mode === 'lobby') {
+                    this.startLobbyMode();
+                } else {
+                    this.queueGame();
+                }
             } catch (error) {
                 this.logToChild(`❌ Spawn error: ${error.message}`);
              
                 await sleep(3000);
                 if (this.bot && this.bot._client) {
-                    this.queueGame();
+                    if (CONFIG.mode === 'lobby') {
+                        this.startLobbyMode();
+                    } else {
+                        this.queueGame();
+                    }
                 }
             }
         });
+        
+        this.bot._client.on('custom_payload', async (packet) => {
+            if (!this.policiesAccepted && packet.channel === 'MC|BOpen') {
+                this.logToChild('Book GUI detected, checking for policies...');
+                await sleep(500); 
+                this.checkAndAcceptPolicies();
+            }
+        });
+        
+        let policiesCheckCount = 0;
+        const policiesCheckInterval = setInterval(() => {
+            if (this.policiesAccepted || policiesCheckCount >= 15) {
+                clearInterval(policiesCheckInterval);
+                return;
+            }
+            policiesCheckCount++;
+            this.checkAndAcceptPolicies();
+        }, 2000);
     
         this.bot.on('message', async (message) => {
             const msg = message.toString();
             this.logToChild(`[CHAT]: ${msg}`);
-            await this.handleMessage(msg);
+            
+            if (CONFIG.mode === 'bedwars') {
+                await this.handleMessage(msg);
+            } else {
+                await this.handleLobbyMessage(msg);
+            }
         });
     
         this.bot.on('end', () => {
@@ -495,6 +547,90 @@ class BedwarsBot {
         this.bot.on('error', (error) => {
             this.logToChild(`❌ ERROR: ${error.message}`);
         });
+    }
+
+    checkAndAcceptPolicies() {
+        try {
+            if (this.policiesAccepted || !this.bot) return;
+            
+                this.logToChild('📖 Hypixel policies book detected - auto accepting...');
+                
+                
+                this.bot.chat('/policies accept');
+                this.policiesAccepted = true;
+                this.logToChild('Sent /policies accept command');
+                
+              
+                setTimeout(() => {
+                    try {
+                        if (this.bot && this.bot.currentWindow) {
+                            this.bot.closeWindow(this.bot.currentWindow);
+                            this.logToChild('Closed book window');
+                        }
+                    } catch (e) {
+                        this.logToChild(`Could not close window: ${e.message}`);
+                    }
+                }, 500);
+            
+        } catch (error) {
+            this.logToChild(`Error checking policies: ${error.message}`);
+            this.logToChild(`what: ${error.stack}`);
+        }}
+    
+
+    async handleLobbyMessage(msg) {
+       
+        if (msg.includes('joined the lobby!') || msg.includes('You are now in')) {
+            this.logToChild('Confirmed in lobby, starting spam');
+        }
+    }
+
+    async startLobbyMode() {
+        this.logToChild('Starting lobby mode sequence');
+        
+        await sleep(1000);
+        this.bot.chat(`/play ${CONFIG.gameMode}`);
+        this.logToChild(`Joined ${CONFIG.gameMode}`);
+        
+
+        await sleep(2000);
+        this.bot.chat('/l');
+        this.logToChild('Sent /l command');
+        
+        await sleep(1000);
+        this.bot.chat('/swaplobby 1');
+        this.logToChild('Switched to lobby 1');
+    
+        await sleep(2000);
+        
+        this.currentState = 'LOBBY_SPAM';
+        manager.updateBotState(this.username, 'LOBBY_SPAM');
+        this.startLobbySpam();
+    }
+
+    startLobbySpam() {
+        this.logToChild('Starting lobby spam');
+        
+        if (this.lobbySpamInterval) {
+            clearInterval(this.lobbySpamInterval);
+        }
+        
+        this.lobbySpamInterval = setInterval(() => {
+            if (this.bot && this.bot._client && CONFIG.mode === 'lobby') {
+                const randomChars = generateRandomString(12);
+                const message = `${CONFIG.lobbyMode.messageTemplate} ${randomChars}`;
+                this.bot.chat(message);
+                this.logToChild(`Sent: ${message}`);
+            }
+        }, CONFIG.lobbyMode.messageInterval);
+    }
+
+    stopLobbySpam() {
+        if (this.lobbySpamInterval) {
+            clearInterval(this.lobbySpamInterval);
+            this.lobbySpamInterval = null;
+            this.logToChild('Stopped lobby spam');
+        }
     }
 
     async handleMessage(msg) {
@@ -1011,6 +1147,7 @@ class BedwarsBot {
 
     handleDisconnect() {
         this.stopInGameActions();
+        this.stopLobbySpam();
         this.currentState = 'DISCONNECTED';
         manager.updateBotState(this.username, 'DISCONNECTED');
         this.logToChild('🔴 DISCONNECTED - Attempting reconnect...');
@@ -1042,6 +1179,7 @@ class BedwarsBot {
 
     disconnect() {
         this.stopInGameActions();
+        this.stopLobbySpam();
         if (this.bot) {
             this.bot.quit();
         }
@@ -1064,25 +1202,53 @@ async function main() {
         console.log('No proxies configured - connecting directly');
     }
     console.log(`Bot Session ID: ${CONFIG.botIdentifier}`);
-    console.log(`Game Mode: ${CONFIG.gameMode}`);
+    console.log(`Console Windows: ${CONFIG.spawnConsoleWindows ? 'Enabled' : 'Disabled'}`);
+    
     axios.get('https://wtfismyip.com/json').then(response => {
         console.log(`Running on IP: ${response.data.YourFuckingIPAddress}`);
         console.log(`Running on Location: ${response.data.YourFuckingLocation}`);
     }).catch(error => {
         console.log('Could not fetch public IP address');
-    }
-    );
-    console.log('Press enter to continue...\n');
+    });
+    
+    // Mode selection
+    console.log('\n═══════════════════════════════════════════════════════════════════');
+    console.log('Select Mode:');
+    console.log('1) Bedwars (queue and play games)');
+    console.log('2) Lobby (spam messages in lobby)');
+    console.log('═══════════════════════════════════════════════════════════════════\n');
+    
+    const rl = readline.createInterface({
+        input: process.stdin,
+        output: process.stdout
+    });
+    
     await new Promise(resolve => {
-        const rl = readline.createInterface({
-            input: process.stdin,
-            output: process.stdout
-        });
-        rl.question('', () => {
-            rl.close();
+        rl.question('Enter mode (1 or 2): ', (answer) => {
+            const mode = answer.trim();
+            if (mode === '1') {
+                CONFIG.mode = 'bedwars';
+                console.log('\n✓ Bedwars mode selected');
+            } else if (mode === '2') {
+                CONFIG.mode = 'lobby';
+                console.log('\n✓ Lobby mode selected');
+            } else {
+                console.log('\n⚠ Invalid selection, defaulting to Bedwars mode');
+                CONFIG.mode = 'bedwars';
+            }
             resolve();
         });
     });
+    
+    console.log(`Game Mode: ${CONFIG.gameMode}`);
+    console.log('\nPress enter to continue...\n');
+    
+    await new Promise(resolve => {
+        rl.question('', () => {
+            resolve();
+        });
+    });
+    
     console.log('\nStarting...\n');
 
   
@@ -1099,11 +1265,6 @@ async function main() {
     }
 
    
-    const rl = readline.createInterface({
-        input: process.stdin,
-        output: process.stdout
-    });
-
     rl.on('line', (input) => {
         const command = input.trim().toLowerCase();
         
@@ -1111,14 +1272,16 @@ async function main() {
             console.log('Shutting down all bots...');
             bots.forEach(bot => bot.disconnect());
             process.exit(0);
-        } else if (command === 'all') {
-            console.log('Requeueing all bots...');
-            bots.forEach(bot => bot.forceRequeue());
-        } else {
-            const botIndex = parseInt(command) - 1;
-            if (botIndex >= 0 && botIndex < bots.length) {
-                console.log(`Requeueing bot ${botIndex + 1}...`);
-                bots[botIndex].forceRequeue();
+        } else if (CONFIG.mode === 'bedwars') {
+            if (command === 'all') {
+                console.log('Requeueing all bots...');
+                bots.forEach(bot => bot.forceRequeue());
+            } else {
+                const botIndex = parseInt(command) - 1;
+                if (botIndex >= 0 && botIndex < bots.length) {
+                    console.log(`Requeueing bot ${botIndex + 1}...`);
+                    bots[botIndex].forceRequeue();
+                }
             }
         }
     });
