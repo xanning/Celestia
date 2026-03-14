@@ -1,5 +1,4 @@
 const mineflayer = require('mineflayer');
-const { pathfinder, Movements, goals: { GoalNear, GoalBlock } } = require('mineflayer-pathfinder');
 const { Vec3 } = require('vec3');
 const fs = require('fs');
 const readline = require('readline');
@@ -9,7 +8,7 @@ const { HttpsProxyAgent } = require('https-proxy-agent');
 const axios = require('axios'); 
 
 const CONFIG = {
-    spawnConsoleWindows: true, // Set to false to disable spawning console log windows for each bot
+    spawnConsoleWindows: 'true', // Set to 'false' to disable, 'true' for all bots, or 'singular' for only first bot
     mode: null, // Will be set on startup: 'bedwars' or 'lobby'
     gameMode: 'bedwars_eight_one', // solos, doubles: bedwars_eight_two, threes: bedwars_four_three, fours: bedwars_four_four
     tokensFile: 'tokens.txt',
@@ -36,7 +35,7 @@ const CONFIG = {
     },
     lobbyMode: {
         messageInterval: 4000, // 4 seconds
-        messageTemplate: 'i am a SPAMMER i like SPAMMING |  '
+        messageTemplate: 'im a spammer i like spamming!!! |  '
     }
 };
 
@@ -159,6 +158,7 @@ class BotManager {
 
     printDashboard() {
         console.clear();
+        process.stdout.write('\x1Bc');
         console.log('═══════════════════════════════════════════════════════════════════');
         console.log('          Celestia');
         console.log('═══════════════════════════════════════════════════════════════════');
@@ -375,6 +375,8 @@ function createProxyAgent(proxyString) {
     return null;
 }
 
+let _botIndex = 0;
+
 class BedwarsBot {
     constructor(tokenData, proxy = null) {
         this.username = tokenData.username;
@@ -392,6 +394,7 @@ class BedwarsBot {
         this.lobbyId = null;
         this.mapName = null;
         this.policiesAccepted = false;
+        this._instanceIndex = _botIndex++;
         
         
         const logDir = './logs';
@@ -405,7 +408,8 @@ class BedwarsBot {
        
         fs.writeFileSync(this.logFile, `=== ${this.username} CONSOLE LOGS ===\n`);
         
-        if (CONFIG.spawnConsoleWindows) {
+        const shouldSpawn = CONFIG.spawnConsoleWindows === 'true' || (CONFIG.spawnConsoleWindows === 'singular' && this._instanceIndex === 0);
+        if (shouldSpawn) {
             const openLogWindow = (logFile) => {
                 const logCommand = `powershell -command "Get-Content ${logFile} -Wait"`;
                 spawn('cmd.exe', ['/c', 'start', 'cmd.exe', '/k', logCommand], { shell: true });
@@ -443,9 +447,6 @@ class BedwarsBot {
 
         try {
             this.bot = mineflayer.createBot(botOptions);
-            if (CONFIG.mode === 'bedwars') {
-                this.bot.loadPlugin(pathfinder);
-            }
             this.setupEventHandlers();
             manager.addBot(this.username, this);
             this.logToChild('✅ Bot connected successfully');
@@ -473,12 +474,12 @@ class BedwarsBot {
                 }
                 
                 if (!this.bot.entity) {
-                    this.logToChild('⚠️ Bot entity not initialized, retrying spawn...');
+                    this.logToChild('Bot entity not inited, retrying spawn...');
                     return;
                 }
     
                 this.logToChild('Entity spawned, waiting for chunks...');
-                this.bot.chat("/language English") // failsafe
+                this.bot.chat("/language English") // failsafe because apperantly theres ppl that dont speak english lol!!!!
               
                 await this.bot.waitForChunksToLoad();
                 
@@ -617,7 +618,7 @@ class BedwarsBot {
         
         this.lobbySpamInterval = setInterval(() => {
             if (this.bot && this.bot._client && CONFIG.mode === 'lobby') {
-                const randomChars = generateRandomString(12);
+                const randomChars = generateRandomString(23);
                 const message = `${CONFIG.lobbyMode.messageTemplate} ${randomChars}`;
                 this.bot.chat(message);
                 this.logToChild(`Sent: ${message}`);
@@ -782,23 +783,6 @@ class BedwarsBot {
         await sleep(3000);
         this.bot.clearControlStates();
         
-       
-        try {
-            const mcData = require('minecraft-data')(this.bot.version);
-            this.defaultMovements = new Movements(this.bot, mcData);
-            this.defaultMovements.canDig = false;
-            this.defaultMovements.scaffoldingBlocks = [];
-            this.defaultMovements.allowParkour = false;
-            this.defaultMovements.allowSprinting = true;
-            
-           
-            this.bot.pathfinder.setMovements(this.defaultMovements);
-            this.logToChild('Pathfinder initialized');
-            
-        } catch (e) {
-            this.logToChild(`Pathfinder init error: ${e.message}`);
-        }
-        
         this.logToChild('Starting periodic actions');
     
        
@@ -819,116 +803,22 @@ class BedwarsBot {
         this.isPerformingAction = true;
     
         try {
-            const rand = Math.random();
-            this.logToChild(`Performing random action (roll: ${rand.toFixed(2)})`);
-    
-           
             const timeoutPromise = new Promise((resolve) => {
                 setTimeout(() => {
                     this.logToChild('Action timeout - forcing completion');
-                    this.safeStopPathfinding();
+                    this.bot.clearControlStates();
                     resolve();
                 }, 8000);
             });
     
-            
-            if (rand < 0.3) {
-                await Promise.race([this.randomWalk(), timeoutPromise]); // THIS IS SUPPosed to be shop but i cba to implement it properly so idisabled it
-            } else if (rand < 0.6) {
-                await Promise.race([this.randomWalk(), timeoutPromise]);
-            } else {
-                await Promise.race([this.visitChest(), timeoutPromise]);
-            }
+            await Promise.race([this.randomWalk(), timeoutPromise]);
         } catch (e) {
             this.logToChild(`Action error: ${e.message}`);
-            this.safeStopPathfinding();
+            this.bot.clearControlStates();
         } finally {
             this.isPerformingAction = false;
             this.logToChild('Action completed, ready for next action');
         }
-    }
-    
-
-    safeStopPathfinding() {
-        try {
-            if (this.bot && this.bot.pathfinder && this.bot.pathfinder.isMoving()) {
-                this.bot.pathfinder.stop();
-            }
-            if (this.bot) {
-                this.bot.clearControlStates();
-            }
-        } catch (e) {
-            this.logToChild(`Error stopping pathfinding: ${e.message}`);
-        }
-    }
-    
-  
-    async safeGoto(goal, timeoutMs = 5000) {
-        if (!this.bot || !this.bot.pathfinder) {
-            throw new Error('Bot or pathfinder not ready');
-        }
-    
-        
-        this.safeStopPathfinding();
-        await sleep(100);
-    
-        return new Promise((resolve, reject) => {
-            let completed = false;
-            let pathStarted = false;
-    
-           
-            const timeout = setTimeout(() => {
-                if (!completed) {
-                    completed = true;
-                    this.logToChild('Pathfinding timeout');
-                    this.safeStopPathfinding();
-                    resolve(false);
-                }
-            }, timeoutMs);
-    
-        
-            const startCheck = setTimeout(() => {
-                if (!pathStarted && !completed) {
-                    this.logToChild('Pathfinding failed to start');
-                    completed = true;
-                    clearTimeout(timeout);
-                    this.safeStopPathfinding();
-                    resolve(false);
-                }
-            }, 500);
-    
-          
-            const checkInterval = setInterval(() => {
-                if (this.bot.pathfinder.isMoving()) {
-                    pathStarted = true;
-                    clearTimeout(startCheck);
-                }
-            }, 100);
-    
-           
-            this.bot.pathfinder.goto(goal)
-                .then(() => {
-                    if (!completed) {
-                        completed = true;
-                        clearTimeout(timeout);
-                        clearTimeout(startCheck);
-                        clearInterval(checkInterval);
-                        this.logToChild('Pathfinding completed');
-                        resolve(true);
-                    }
-                })
-                .catch((err) => {
-                    if (!completed) {
-                        completed = true;
-                        clearTimeout(timeout);
-                        clearTimeout(startCheck);
-                        clearInterval(checkInterval);
-                        this.logToChild(`Pathfinding error: ${err.message}`);
-                        this.safeStopPathfinding();
-                        resolve(false);
-                    }
-                });
-        });
     }
     
   
@@ -970,12 +860,12 @@ class BedwarsBot {
                 if (currentDist < 2) {
                     this.bot.clearControlStates();
                     clearInterval(progressCheck);
-                    this.logToChild('Simple walk completed (reached target)');
+                    this.logToChild('walk completed (reached target)');
                     resolve(true);
                 } else if (Date.now() - startTime > duration) {
                     this.bot.clearControlStates();
                     clearInterval(progressCheck);
-                    this.logToChild('Simple walk completed (timeout)');
+                    this.logToChild('walk completed (timeout)');
                     resolve(true);
                 }
                 
@@ -996,8 +886,8 @@ class BedwarsBot {
     }
     
     async randomWalk() {
-        if (!this.bot || !this.bot.pathfinder || this.currentState !== 'IN_GAME') {
-            this.logToChild('Bot or pathfinder not ready');
+        if (!this.bot || this.currentState !== 'IN_GAME') {
+            this.logToChild('Bot not ready');
             return;
         }
     
@@ -1011,127 +901,10 @@ class BedwarsBot {
             const targetPos = pos.plus(randomOffset);
     
             this.logToChild(`Walking to (${targetPos.x.toFixed(1)}, ${targetPos.y.toFixed(1)}, ${targetPos.z.toFixed(1)})`);
-            
-            const goal = new GoalNear(targetPos.x, targetPos.y, targetPos.z, 3);
-            
-           
-            const success = await this.safeGoto(goal, 5000);
-            
-            if (!success) {
-                
-                this.logToChild('Pathfinder failed, using simple movement');
-                await this.simpleWalkTowards(targetPos, 3000);
-            }
+            await this.simpleWalkTowards(targetPos, 3000);
         } catch (e) {
-            this.logToChild(`⚠️ Walk failed: ${e.message}`);
-            this.safeStopPathfinding();
-        }
-    }
-    
-    async visitShop() {
-        if (!this.bot || !this.bot.pathfinder || this.currentState !== 'IN_GAME') {
-            this.logToChild('Bot or pathfinder not ready');
-            return;
-        }
-    
-        try {
-           
-            const villager = Object.values(this.bot.entities).find(entity => 
-                entity.type === 'mob' && 
-                entity.name === 'villager' &&
-                this.bot.entity.position.distanceTo(entity.position) < 25
-            );
-    
-            if (!villager) {
-                this.logToChild('No shop found nearby');
-                return;
-            }
-    
-            const distance = this.bot.entity.position.distanceTo(villager.position);
-            this.logToChild(`Found villager at distance ${distance.toFixed(1)}`);
-            
-            this.logToChild(`Moving to villager at (${villager.position.x.toFixed(1)}, ${villager.position.y.toFixed(1)}, ${villager.position.z.toFixed(1)})`);
-            
-            const goal = new GoalNear(
-                villager.position.x,
-                villager.position.y,
-                villager.position.z,
-                4
-            );
-            
-            
-            const success = await this.safeGoto(goal, 6000);
-            
-            if (!success) {
-                this.logToChild('Pathfinder failed, using simple movement');
-                await this.simpleWalkTowards(villager.position, 4000);
-            }
-            
-            await sleep(500);
-        } catch (e) {
-            this.logToChild(`Shop visit failed: ${e.message}`);
-            this.safeStopPathfinding();
-        }
-    }
-    
-    async visitChest() {
-        if (!this.bot || !this.bot.pathfinder || this.currentState !== 'IN_GAME') {
-            this.logToChild('Bot or pathfinder not ready');
-            return;
-        }
-    
-        try {
-            const mcData = require('minecraft-data')(this.bot.version);
-            const botPosition = this.bot.entity.position.floored();
-            let nearestChest = null;
-            let nearestDistance = Infinity;
-    
-            
-            for (let x = -8; x <= 8; x++) {
-                for (let y = -3; y <= 3; y++) {
-                    for (let z = -8; z <= 8; z++) {
-                        const checkPos = botPosition.offset(x, y, z);
-                        const block = this.bot.blockAt(checkPos);
-                        if (block && block.type === mcData.blocksByName.chest.id) {
-                            const distance = botPosition.distanceTo(checkPos);
-                            if (distance < nearestDistance && distance > 1) {
-                                nearestDistance = distance;
-                                nearestChest = checkPos;
-                            }
-                        }
-                    }
-                }
-            }
-    
-            if (!nearestChest) {
-                this.logToChild('No chest found nearby');
-                return;
-            }
-    
-            this.logToChild(`Found chest at distance ${nearestDistance.toFixed(1)}`);
-            
-            const currentPos = this.bot.entity.position;
-            this.logToChild(`Moving from (${currentPos.x.toFixed(1)}, ${currentPos.y.toFixed(1)}, ${currentPos.z.toFixed(1)}) to chest at (${nearestChest.x}, ${nearestChest.y}, ${nearestChest.z})`);
-            
-            const goal = new GoalNear(
-                nearestChest.x,
-                nearestChest.y,
-                nearestChest.z,
-                2
-            );
-            
-            
-            const success = await this.safeGoto(goal, 6000);
-            
-            if (!success) {
-                this.logToChild('Pathfinder failed, using simple movement');
-                await this.simpleWalkTowards(new Vec3(nearestChest.x, nearestChest.y, nearestChest.z), 3000);
-            }
-            
-            await sleep(500);
-        } catch (e) {
-            this.logToChild(`Chest visit failed: ${e.message}`);
-            this.safeStopPathfinding();
+            this.logToChild(`Walk failed: ${e.message}`);
+            this.bot.clearControlStates();
         }
     }
     
@@ -1142,7 +915,9 @@ class BedwarsBot {
             this.logToChild('Stopped in-game actions');
         }
         
-        this.safeStopPathfinding();
+        if (this.bot) {
+            this.bot.clearControlStates();
+        }
     }
 
     handleDisconnect() {
@@ -1228,12 +1003,12 @@ async function main() {
             const mode = answer.trim();
             if (mode === '1') {
                 CONFIG.mode = 'bedwars';
-                console.log('\n✓ Bedwars mode selected');
+                console.log('\nBedwars mode selected');
             } else if (mode === '2') {
                 CONFIG.mode = 'lobby';
-                console.log('\n✓ Lobby mode selected');
+                console.log('\nLobby mode selected');
             } else {
-                console.log('\n⚠ Invalid selection, defaulting to Bedwars mode');
+                console.log('\nInvalid selection, defaulting to Bedwars mode');
                 CONFIG.mode = 'bedwars';
             }
             resolve();
@@ -1249,7 +1024,7 @@ async function main() {
         });
     });
     
-    console.log('\nStarting...\n');
+    console.log('\nhm..\n');
 
   
     const bots = [];
